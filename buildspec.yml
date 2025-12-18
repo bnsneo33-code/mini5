@@ -12,45 +12,30 @@ phases:
         node -v
         npm -v
 
-  pre_build:
+  build:
     commands:
       - |
-        echo "[pre_build] normalize repo root"
+        echo "[build] normalize repo root"
         if [ -d "book_management" ]; then
           cd book_management
         fi
-
         WORKDIR="$(pwd)"
         echo "WORKDIR=${WORKDIR}"
         ls -la
 
-        echo "[pre_build] detect backend dir (gradlew/build.gradle)"
+        echo "[build] detect backend dir"
         BACKEND_DIR="$(dirname "$(find . -maxdepth 6 -type f -name gradlew -print -quit)")"
         if [ -z "${BACKEND_DIR}" ] || [ "${BACKEND_DIR}" = "." ]; then
           BACKEND_DIR="$(dirname "$(find . -maxdepth 6 -type f -name build.gradle -print -quit)")"
         fi
         echo "BACKEND_DIR=${BACKEND_DIR}"
 
-        echo "[pre_build] detect frontend dir (package.json)"
-        FRONTEND_DIR="$(dirname "$(find . -maxdepth 6 -type f -name package.json -not -path '*/node_modules/*' -print -quit)")"
-        echo "FRONTEND_DIR=${FRONTEND_DIR}"
-
-        echo "export WORKDIR='${WORKDIR}'" > /tmp/envvars
-        echo "export BACKEND_DIR='${BACKEND_DIR}'" >> /tmp/envvars
-        echo "export FRONTEND_DIR='${FRONTEND_DIR}'" >> /tmp/envvars
-        cat /tmp/envvars
-
-  build:
-    commands:
-      - |
-        . /tmp/envvars
-
-        echo "[build] backend"
         if [ -z "${BACKEND_DIR}" ] || [ ! -d "${WORKDIR}/${BACKEND_DIR}" ]; then
-          echo "ERROR: backend directory not found"
+          echo "ERROR: backend directory not found (gradlew/build.gradle)"
           exit 2
         fi
 
+        echo "[build] backend build"
         cd "${WORKDIR}/${BACKEND_DIR}"
         if [ ! -f "./gradlew" ]; then
           echo "ERROR: gradlew not found in ${WORKDIR}/${BACKEND_DIR}"
@@ -60,27 +45,27 @@ phases:
         chmod +x ./gradlew
         ./gradlew --no-daemon clean test bootJar
 
-        echo "[build] frontend"
+        echo "[build] detect frontend dir"
         cd "${WORKDIR}"
+        FRONTEND_DIR="$(dirname "$(find . -maxdepth 6 -type f -name package.json -not -path '*/node_modules/*' -print -quit)")"
+        echo "FRONTEND_DIR=${FRONTEND_DIR}"
+
         if [ -z "${FRONTEND_DIR}" ] || [ ! -d "${WORKDIR}/${FRONTEND_DIR}" ]; then
-          echo "ERROR: frontend directory not found"
+          echo "ERROR: frontend directory not found (package.json)"
           exit 4
         fi
 
+        echo "[build] frontend build"
         cd "${WORKDIR}/${FRONTEND_DIR}"
         npm ci
         npm run build
 
-  post_build:
-    commands:
-      - |
-        . /tmp/envvars
-
-        echo "[post_build] collect artifacts"
+        echo "[build] collect artifacts"
         cd "${WORKDIR}"
         mkdir -p artifact/backend artifact/frontend
 
         JAR_PATH="$(find "${WORKDIR}/${BACKEND_DIR}/build/libs" -maxdepth 1 -type f -name "*.jar" -print -quit)"
+        echo "JAR_PATH=${JAR_PATH}"
         if [ -z "${JAR_PATH}" ]; then
           echo "ERROR: jar not found under build/libs"
           ls -la "${WORKDIR}/${BACKEND_DIR}/build/libs" || true
@@ -95,6 +80,8 @@ phases:
           ls -la "${WORKDIR}/${FRONTEND_DIR}" || true
           exit 6
         fi
+
+        echo "COMMIT=${CODEBUILD_RESOLVED_SOURCE_VERSION}" > artifact/BUILD_INFO.txt
 
 artifacts:
   files:
