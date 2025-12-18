@@ -4,130 +4,60 @@ phases:
   install:
     runtime-versions:
       java: corretto17
-      nodejs: 18
+      nodejs: 20
     commands:
-      - |
-        echo "[install] runtime check"
-        java -version
-        node -v
-        npm -v
+      - echo "[install] runtime check"
+      - java -version
+      - node -v
+      - npm -v
 
   build:
     commands:
-      - |
-        echo "[build] repo root"
-        if [ -d "book_management" ]; then cd book_management; fi
-        WORKDIR="$(pwd)"
-        echo "WORKDIR=${WORKDIR}"
-        ls -la
+      - echo "[build] repo root"
+      - WORKDIR="$(pwd)"
+      - echo "WORKDIR=${WORKDIR}"
+      - ls -la
 
-        echo "[build] detect backend dir"
-        BACKEND_DIR="$(dirname "$(find . -maxdepth 6 -type f -name gradlew -print -quit)")"
-        if [ -z "${BACKEND_DIR}" ] || [ "${BACKEND_DIR}" = "." ]; then
-          BACKEND_DIR="$(dirname "$(find . -maxdepth 6 -type f -name build.gradle -print -quit)")"
-        fi
-        if [ -z "${BACKEND_DIR}" ] || [ "${BACKEND_DIR}" = "." ]; then
-          BACKEND_DIR="$(dirname "$(find . -maxdepth 6 -type f -name pom.xml -print -quit)")"
-        fi
-        echo "BACKEND_DIR=${BACKEND_DIR}"
+      # -------------------------
+      # Backend (fixed path)
+      # -------------------------
+      - echo "[build] backend build (backend/demo)"
+      - cd "${WORKDIR}/backend/demo"
+      - ls -la
+      - chmod +x ./gradlew
+      - ./gradlew --no-daemon clean test build
 
-        if [ -n "${BACKEND_DIR}" ] && [ -d "${WORKDIR}/${BACKEND_DIR}" ]; then
-          echo "[build] backend build"
-          cd "${WORKDIR}/${BACKEND_DIR}"
-          ls -la
+      # -------------------------
+      # Frontend (fixed path)
+      # -------------------------
+      - echo "[build] frontend build (frontend)"
+      - cd "${WORKDIR}/frontend"
+      - test -f package.json || (echo "ERROR: frontend/package.json not found" && exit 10)
+      - npm ci
+      - npm run build
 
-          if [ -f "./gradlew" ]; then
-            echo "Use Gradle Wrapper"
-            chmod +x ./gradlew
-            ./gradlew --no-daemon clean test build
-          elif command -v gradle >/dev/null 2>&1; then
-            echo "Use system gradle"
-            gradle clean test build
-          elif [ -f "./mvnw" ]; then
-            echo "Use Maven Wrapper"
-            chmod +x ./mvnw
-            ./mvnw -B test package
-          elif command -v mvn >/dev/null 2>&1; then
-            echo "Use system mvn"
-            mvn -B test package
-          else
-            echo "[warn] no gradle/maven tool found. skipping backend build"
-          fi
-        else
-          echo "[warn] backend directory not found. skipping backend build"
-        fi
+      # -------------------------
+      # Collect artifacts
+      # -------------------------
+      - echo "[build] collect artifacts"
+      - cd "${WORKDIR}"
+      - mkdir -p artifact/backend artifact/frontend
 
-        echo "[build] detect frontend dir (package.json)"
-        cd "${WORKDIR}"
-        FRONTEND_DIR="$(dirname "$(find . -maxdepth 6 -type f -name package.json -not -path '*/node_modules/*' -print -quit)")"
-        echo "FRONTEND_DIR=${FRONTEND_DIR}"
+      # backend jar
+      - JAR_PATH="$(ls -1 backend/demo/build/libs/*.jar | head -n 1)"
+      - echo "JAR_PATH=${JAR_PATH}"
+      - test -n "${JAR_PATH}" || (echo "ERROR: jar not found under backend/demo/build/libs" && exit 11)
+      - cp "${JAR_PATH}" artifact/backend/
 
-        if [ -z "${FRONTEND_DIR}" ] || [ ! -d "${WORKDIR}/${FRONTEND_DIR}" ]; then
-          echo "ERROR: frontend directory not found (package.json)"
-          exit 4
-        fi
+      # frontend output (common frameworks)
+      - FRONT_OUT=""
+      - for d in dist build out .next .output storybook-static; do if [ -d "frontend/${d}" ]; then FRONT_OUT="frontend/${d}"; break; fi; done
+      - echo "FRONT_OUT=${FRONT_OUT}"
+      - test -n "${FRONT_OUT}" || (echo "ERROR: frontend output dir not found (dist/build/out/.next...)" && ls -la frontend && exit 12)
+      - cp -r "${FRONT_OUT}" artifact/frontend/
 
-        echo "[build] frontend build"
-        cd "${WORKDIR}/${FRONTEND_DIR}"
-        npm ci
-        npm run build
-
-        echo "[build] collect artifacts"
-        cd "${WORKDIR}"
-        mkdir -p artifact/backend artifact/frontend
-
-        echo "[build] backend artifact copy (optional jar/war)"
-        if [ -n "${BACKEND_DIR}" ] && [ -d "${WORKDIR}/${BACKEND_DIR}" ]; then
-          BACK_ART_PATH="$(find "${WORKDIR}/${BACKEND_DIR}" -maxdepth 12 -type f \( -name "*.jar" -o -name "*.war" \) \
-            -not -path "*/.gradle/*" -not -path "*/gradle/wrapper/*" -print -quit)"
-          echo "BACK_ART_PATH=${BACK_ART_PATH}"
-          if [ -n "${BACK_ART_PATH}" ]; then
-            cp "${BACK_ART_PATH}" artifact/backend/
-          else
-            echo "[warn] backend jar/war not found. (ok for CI)"
-          fi
-        fi
-
-        echo "[build] frontend output detect (dist/build/out/.next)"
-        FRONT_ROOT="${WORKDIR}/${FRONTEND_DIR}"
-        echo "FRONT_ROOT=${FRONT_ROOT}"
-
-        # 후보 1) index.html (정적 빌드)
-        INDEX_HTML="$(find "${FRONT_ROOT}" -maxdepth 10 -type f -name index.html -not -path "*/node_modules/*" -print -quit)"
-        echo "INDEX_HTML=${INDEX_HTML}"
-
-        FRONT_OUT=""
-        if [ -n "${INDEX_HTML}" ]; then
-          FRONT_OUT="$(dirname "${INDEX_HTML}")"
-        else
-          # 후보 2) 디렉터리 기반(다양한 프레임워크)
-          for d in dist build out .next .output storybook-static; do
-            if [ -d "${FRONT_ROOT}/${d}" ]; then
-              FRONT_OUT="${FRONT_ROOT}/${d}"
-              break
-            fi
-          done
-        fi
-
-        echo "FRONT_OUT=${FRONT_OUT}"
-
-        if [ -n "${FRONT_OUT}" ] && [ -d "${FRONT_OUT}" ]; then
-          cp -r "${FRONT_OUT}" artifact/frontend/
-        else
-          echo "[warn] frontend output not found. keeping diagnostics and continuing (CI pass)."
-          echo "NO_FRONTEND_OUTPUT" > artifact/frontend/_NO_OUTPUT.txt
-          echo "FRONTEND_DIR=${FRONTEND_DIR}" >> artifact/frontend/_NO_OUTPUT.txt
-          echo "Check package.json build script and output path." >> artifact/frontend/_NO_OUTPUT.txt
-          echo "--- frontend top-level ---" >> artifact/frontend/_NO_OUTPUT.txt
-          ls -la "${FRONT_ROOT}" >> artifact/frontend/_NO_OUTPUT.txt 2>&1 || true
-        fi
-
-        echo "COMMIT=${CODEBUILD_RESOLVED_SOURCE_VERSION}" > artifact/BUILD_INFO.txt
-        echo "BACKEND_DIR=${BACKEND_DIR}" >> artifact/BUILD_INFO.txt
-        echo "FRONTEND_DIR=${FRONTEND_DIR}" >> artifact/BUILD_INFO.txt
-        echo "FRONT_OUT=${FRONT_OUT}" >> artifact/BUILD_INFO.txt
+      - echo "COMMIT=${CODEBUILD_RESOLVED_SOURCE_VERSION}" > artifact/BUILD_INFO.txt
 
 artifacts:
   files:
     - artifact/**/*
-  discard-paths: no
