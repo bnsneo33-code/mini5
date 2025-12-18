@@ -6,58 +6,75 @@ phases:
       java: corretto17
       nodejs: 20
     commands:
-      - echo "[install] runtime check"
-      - java -version
-      - node -v
-      - npm -v
+      - |
+        echo "[install] runtime check"
+        java -version
+        node -v
+        npm -v
 
   build:
     commands:
-      - echo "[build] repo root"
-      - WORKDIR="$(pwd)"
-      - echo "WORKDIR=${WORKDIR}"
-      - ls -la
+      - |
+        set -e
 
-      # -------------------------
-      # Backend (fixed path)
-      # -------------------------
-      - echo "[build] backend build (backend/demo)"
-      - cd "${WORKDIR}/backend/demo"
-      - ls -la
-      - chmod +x ./gradlew
-      - ./gradlew --no-daemon clean test build
+        echo "[build] repo root"
+        WORKDIR="$(pwd)"
+        echo "WORKDIR=${WORKDIR}"
+        ls -la
 
-      # -------------------------
-      # Frontend (fixed path)
-      # -------------------------
-      - echo "[build] frontend build (frontend)"
-      - cd "${WORKDIR}/frontend"
-      - test -f package.json || (echo "ERROR: frontend/package.json not found" && exit 10)
-      - npm ci
-      - npm run build
+        echo "[build] backend build: backend/demo"
+        cd "${WORKDIR}/backend/demo"
+        chmod +x ./gradlew
+        ./gradlew --no-daemon clean test build
 
-      # -------------------------
-      # Collect artifacts
-      # -------------------------
-      - echo "[build] collect artifacts"
-      - cd "${WORKDIR}"
-      - mkdir -p artifact/backend artifact/frontend
+        echo "[build] frontend build: frontend"
+        cd "${WORKDIR}/frontend"
 
-      # backend jar
-      - JAR_PATH="$(ls -1 backend/demo/build/libs/*.jar | head -n 1)"
-      - echo "JAR_PATH=${JAR_PATH}"
-      - test -n "${JAR_PATH}" || (echo "ERROR: jar not found under backend/demo/build/libs" && exit 11)
-      - cp "${JAR_PATH}" artifact/backend/
+        if [ ! -f "package.json" ]; then
+          echo "ERROR: frontend/package.json not found"
+          exit 10
+        fi
 
-      # frontend output (common frameworks)
-      - FRONT_OUT=""
-      - for d in dist build out .next .output storybook-static; do if [ -d "frontend/${d}" ]; then FRONT_OUT="frontend/${d}"; break; fi; done
-      - echo "FRONT_OUT=${FRONT_OUT}"
-      - test -n "${FRONT_OUT}" || (echo "ERROR: frontend output dir not found (dist/build/out/.next...)" && ls -la frontend && exit 12)
-      - cp -r "${FRONT_OUT}" artifact/frontend/
+        node -e "const p=require('./package.json'); if(!p.scripts||!p.scripts.build){console.error('ERROR: Missing script: build'); process.exit(11)}"
 
-      - echo "COMMIT=${CODEBUILD_RESOLVED_SOURCE_VERSION}" > artifact/BUILD_INFO.txt
+        npm ci
+        npm run build
+
+        echo "[build] collect artifacts"
+        cd "${WORKDIR}"
+        rm -rf artifact
+        mkdir -p artifact/backend artifact/frontend
+
+        # backend jar
+        if ls backend/demo/build/libs/*.jar >/dev/null 2>&1; then
+          cp backend/demo/build/libs/*.jar artifact/backend/
+        else
+          echo "ERROR: jar not found under backend/demo/build/libs"
+          ls -la backend/demo/build || true
+          exit 12
+        fi
+
+        # frontend output (common)
+        FRONT_OUT=""
+        for d in dist build out .next .output storybook-static; do
+          if [ -d "frontend/${d}" ]; then
+            FRONT_OUT="frontend/${d}"
+            break
+          fi
+        done
+
+        echo "FRONT_OUT=${FRONT_OUT}"
+        if [ -z "${FRONT_OUT}" ]; then
+          echo "ERROR: frontend output dir not found (dist/build/out/.next/.output/...)"
+          ls -la frontend || true
+          exit 13
+        fi
+
+        cp -r "${FRONT_OUT}" artifact/frontend/
+
+        echo "COMMIT=${CODEBUILD_RESOLVED_SOURCE_VERSION}" > artifact/BUILD_INFO.txt
 
 artifacts:
   files:
     - artifact/**/*
+  discard-paths: no
