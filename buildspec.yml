@@ -13,22 +13,33 @@ phases:
 
   pre_build:
     commands:
-      - echo "[pre_build] normalize repo root"
-      # 레포 루트가 book_management/를 한 번 더 감싸는 경우까지 자동 대응
+      - echo "[pre_build] set WORKDIR"
       - if [ -d "book_management" ]; then cd book_management; fi
       - export WORKDIR="$(pwd)"
       - echo "WORKDIR=${WORKDIR}"
+      - echo "[pre_build] repo top-level"
       - ls -la
+
+      - echo "[pre_build] detect backend dir (gradlew/build.gradle)"
+      - export BACKEND_DIR="$(dirname "$(find . -maxdepth 5 -type f -name gradlew -print -quit)")"
+      - if [ -z "${BACKEND_DIR}" ] || [ "${BACKEND_DIR}" = "." ]; then export BACKEND_DIR="$(dirname "$(find . -maxdepth 5 -type f -name build.gradle -print -quit)")"; fi
+      - echo "BACKEND_DIR=${BACKEND_DIR}"
+
+      - echo "[pre_build] detect frontend dir (package.json)"
+      - export FRONTEND_DIR="$(dirname "$(find . -maxdepth 5 -type f -name package.json -not -path "*/node_modules/*" -print -quit)")"
+      - echo "FRONTEND_DIR=${FRONTEND_DIR}"
 
   build:
     commands:
-      - echo "[build] backend (Gradle) clean test bootJar"
-      - cd "${WORKDIR}/backend/demo"
-      - chmod +x ./gradlew
-      - ./gradlew --no-daemon clean test bootJar
+      - echo "[build] backend"
+      - if [ -z "${BACKEND_DIR}" ] || [ ! -d "${BACKEND_DIR}" ]; then echo "ERROR: backend directory not found (gradlew/build.gradle)"; exit 2; fi
+      - cd "${WORKDIR}/${BACKEND_DIR}"
+      - if [ -f "./gradlew" ]; then chmod +x ./gradlew; ./gradlew --no-daemon clean test bootJar; else echo "ERROR: gradlew not found in ${BACKEND_DIR}"; exit 3; fi
 
-      - echo "[build] frontend (Vite) npm ci && npm run build"
-      - cd "${WORKDIR}/frontend/src"
+      - echo "[build] frontend"
+      - cd "${WORKDIR}"
+      - if [ -z "${FRONTEND_DIR}" ] || [ ! -d "${FRONTEND_DIR}" ]; then echo "ERROR: frontend directory not found (package.json)"; exit 4; fi
+      - cd "${WORKDIR}/${FRONTEND_DIR}"
       - npm ci
       - npm run build
 
@@ -37,20 +48,14 @@ phases:
       - echo "[post_build] collect artifacts"
       - cd "${WORKDIR}"
       - mkdir -p artifact/backend artifact/frontend
-      - cp backend/demo/build/libs/*.jar artifact/backend/
-      - cp -r frontend/src/dist artifact/frontend/
-      - echo "COMMIT=${CODEBUILD_RESOLVED_SOURCE_VERSION}" > artifact/BUILD_INFO.txt
-      - echo "BUILD_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> artifact/BUILD_INFO.txt
-      - echo "[post_build] artifact tree"
-      - ls -R artifact
+
+      - export JAR_PATH="$(find "${WORKDIR}/${BACKEND_DIR}/build/libs" -maxdepth 1 -type f -name "*.jar" -print -quit)"
+      - if [ -z "${JAR_PATH}" ]; then echo "ERROR: jar not found under build/libs"; exit 5; fi
+      - cp "${JAR_PATH}" artifact/backend/
+
+      - if [ -d "${WORKDIR}/${FRONTEND_DIR}/dist" ]; then cp -r "${WORKDIR}/${FRONTEND_DIR}/dist" artifact/frontend/; else echo "ERROR: dist not found"; exit 6; fi
 
 artifacts:
   files:
     - artifact/**/*
   discard-paths: no
-
-cache:
-  paths:
-    - '/root/.gradle/caches/**/*'
-    - '/root/.gradle/wrapper/**/*'
-    - '/root/.npm/**/*'
