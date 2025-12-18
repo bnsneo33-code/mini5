@@ -1,0 +1,56 @@
+version: 0.2
+
+phases:
+  install:
+    runtime-versions:
+      java: corretto17
+      nodejs: 18
+    commands:
+      - echo "[install] runtime check"
+      - java -version
+      - node -v
+      - npm -v
+
+  pre_build:
+    commands:
+      - echo "[pre_build] normalize repo root"
+      # 레포 루트가 book_management/를 한 번 더 감싸는 경우까지 자동 대응
+      - if [ -d "book_management" ]; then cd book_management; fi
+      - export WORKDIR="$(pwd)"
+      - echo "WORKDIR=${WORKDIR}"
+      - ls -la
+
+  build:
+    commands:
+      - echo "[build] backend (Gradle) clean test bootJar"
+      - cd "${WORKDIR}/backend/demo"
+      - chmod +x ./gradlew
+      - ./gradlew --no-daemon clean test bootJar
+
+      - echo "[build] frontend (Vite) npm ci && npm run build"
+      - cd "${WORKDIR}/frontend/src"
+      - npm ci
+      - npm run build
+
+  post_build:
+    commands:
+      - echo "[post_build] collect artifacts"
+      - cd "${WORKDIR}"
+      - mkdir -p artifact/backend artifact/frontend
+      - cp backend/demo/build/libs/*.jar artifact/backend/
+      - cp -r frontend/src/dist artifact/frontend/
+      - echo "COMMIT=${CODEBUILD_RESOLVED_SOURCE_VERSION}" > artifact/BUILD_INFO.txt
+      - echo "BUILD_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> artifact/BUILD_INFO.txt
+      - echo "[post_build] artifact tree"
+      - ls -R artifact
+
+artifacts:
+  files:
+    - artifact/**/*
+  discard-paths: no
+
+cache:
+  paths:
+    - '/root/.gradle/caches/**/*'
+    - '/root/.gradle/wrapper/**/*'
+    - '/root/.npm/**/*'
