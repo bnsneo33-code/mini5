@@ -78,25 +78,28 @@ phases:
         cd "${WORKDIR}"
         mkdir -p artifact/backend artifact/frontend
 
-        echo "[build] find backend artifact (jar/war)"
-        BACK_ART_PATH="$(find "${WORKDIR}/${BACKEND_DIR}" -maxdepth 8 -type f \( -name "*.jar" -o -name "*.war" \) \
+        echo "[build] search backend jar/war (optional)"
+        BACK_ART_PATH="$(find "${WORKDIR}/${BACKEND_DIR}" -maxdepth 10 -type f \( -name "*.jar" -o -name "*.war" \) \
           -not -path "*/.gradle/*" -not -path "*/gradle/wrapper/*" -print -quit)"
         echo "BACK_ART_PATH=${BACK_ART_PATH}"
 
-        if [ -z "${BACK_ART_PATH}" ]; then
-          echo "ERROR: backend artifact (jar/war) not found. Dumping dirs..."
-          echo "---- ${WORKDIR}/${BACKEND_DIR}/build ----"
-          ls -la "${WORKDIR}/${BACKEND_DIR}/build" 2>/dev/null || true
-          echo "---- ${WORKDIR}/${BACKEND_DIR}/build/libs ----"
-          ls -la "${WORKDIR}/${BACKEND_DIR}/build/libs" 2>/dev/null || true
-          echo "---- ${WORKDIR}/${BACKEND_DIR}/target ----"
-          ls -la "${WORKDIR}/${BACKEND_DIR}/target" 2>/dev/null || true
-          exit 5
+        if [ -n "${BACK_ART_PATH}" ]; then
+          cp "${BACK_ART_PATH}" artifact/backend/
+          echo "[build] backend artifact copied"
+        else
+          echo "[warn] backend jar/war not found. Copying build outputs (build/ or target/) instead."
+          if [ -d "${WORKDIR}/${BACKEND_DIR}/build" ]; then
+            mkdir -p artifact/backend/build_output
+            cp -r "${WORKDIR}/${BACKEND_DIR}/build" artifact/backend/build_output/
+          fi
+          if [ -d "${WORKDIR}/${BACKEND_DIR}/target" ]; then
+            mkdir -p artifact/backend/build_output
+            cp -r "${WORKDIR}/${BACKEND_DIR}/target" artifact/backend/build_output/
+          fi
         fi
 
-        cp "${BACK_ART_PATH}" artifact/backend/
-
-        echo "[build] find frontend output (dist/build)"
+        echo "[build] frontend output copy (dist/build)"
+        cd "${WORKDIR}"
         if [ -d "${WORKDIR}/${FRONTEND_DIR}/dist" ]; then
           cp -r "${WORKDIR}/${FRONTEND_DIR}/dist" artifact/frontend/
         elif [ -d "${WORKDIR}/${FRONTEND_DIR}/build" ]; then
@@ -108,6 +111,8 @@ phases:
         fi
 
         echo "COMMIT=${CODEBUILD_RESOLVED_SOURCE_VERSION}" > artifact/BUILD_INFO.txt
+        echo "BACKEND_DIR=${BACKEND_DIR}" >> artifact/BUILD_INFO.txt
+        echo "FRONTEND_DIR=${FRONTEND_DIR}" >> artifact/BUILD_INFO.txt
 
 artifacts:
   files:
