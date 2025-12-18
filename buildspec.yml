@@ -7,7 +7,7 @@ phases:
       nodejs: 18
     commands:
       - |
-        echo "[install] runtime check"
+        echo "[install] java/node check"
         java -version
         node -v
         npm -v
@@ -15,73 +15,86 @@ phases:
   build:
     commands:
       - |
-        echo "[build] normalize repo root"
-        if [ -d "book_management" ]; then
-          cd book_management
-        fi
-        WORKDIR="$(pwd)"
-        echo "WORKDIR=${WORKDIR}"
-        ls -la
+        echo "[build] repo root normalize";
+        if [ -d "book_management" ]; then cd book_management; fi;
+        WORKDIR="$(pwd)"; echo "WORKDIR=${WORKDIR}";
+        echo "[build] quick tree"; ls -la;
 
-        echo "[build] detect backend dir"
-        BACKEND_DIR="$(dirname "$(find . -maxdepth 6 -type f -name gradlew -print -quit)")"
+        echo "[build] locate build files";
+        echo "---- gradlew ----"; find . -maxdepth 6 -type f -name gradlew -print || true;
+        echo "---- build.gradle ----"; find . -maxdepth 6 -type f -name build.gradle -print || true;
+        echo "---- pom.xml ----"; find . -maxdepth 6 -type f -name pom.xml -print || true;
+        echo "---- package.json ----"; find . -maxdepth 6 -type f -name package.json -not -path "*/node_modules/*" -print || true;
+
+        # backend dir: prefer gradlew dir, else build.gradle dir, else pom.xml dir
+        BACKEND_DIR="$(dirname "$(find . -maxdepth 6 -type f -name gradlew -print -quit)")";
         if [ -z "${BACKEND_DIR}" ] || [ "${BACKEND_DIR}" = "." ]; then
-          BACKEND_DIR="$(dirname "$(find . -maxdepth 6 -type f -name build.gradle -print -quit)")"
-        fi
-        echo "BACKEND_DIR=${BACKEND_DIR}"
+          BACKEND_DIR="$(dirname "$(find . -maxdepth 6 -type f -name build.gradle -print -quit)")";
+        fi;
+        if [ -z "${BACKEND_DIR}" ] || [ "${BACKEND_DIR}" = "." ]; then
+          BACKEND_DIR="$(dirname "$(find . -maxdepth 6 -type f -name pom.xml -print -quit)")";
+        fi;
+        echo "BACKEND_DIR=${BACKEND_DIR}";
 
         if [ -z "${BACKEND_DIR}" ] || [ ! -d "${WORKDIR}/${BACKEND_DIR}" ]; then
-          echo "ERROR: backend directory not found (gradlew/build.gradle)"
-          exit 2
-        fi
+          echo "ERROR: backend directory not found";
+          exit 2;
+        fi;
 
-        echo "[build] backend build"
-        cd "${WORKDIR}/${BACKEND_DIR}"
-        if [ ! -f "./gradlew" ]; then
-          echo "ERROR: gradlew not found in ${WORKDIR}/${BACKEND_DIR}"
-          ls -la
-          exit 3
-        fi
-        chmod +x ./gradlew
-        ./gradlew --no-daemon clean test bootJar
+        echo "[build] backend build start";
+        cd "${WORKDIR}/${BACKEND_DIR}";
+        ls -la;
 
-        echo "[build] detect frontend dir"
-        cd "${WORKDIR}"
-        FRONTEND_DIR="$(dirname "$(find . -maxdepth 6 -type f -name package.json -not -path '*/node_modules/*' -print -quit)")"
-        echo "FRONTEND_DIR=${FRONTEND_DIR}"
+        if [ -f "./gradlew" ]; then
+          echo "Use Gradle Wrapper";
+          chmod +x ./gradlew;
+          ./gradlew --no-daemon clean test bootJar;
+        elif command -v gradle >/dev/null 2>&1; then
+          echo "Use system gradle";
+          gradle clean test bootJar;
+        elif [ -f "./mvnw" ]; then
+          echo "Use Maven Wrapper";
+          chmod +x ./mvnw;
+          ./mvnw -B test package;
+        elif command -v mvn >/dev/null 2>&1; then
+          echo "Use system mvn";
+          mvn -B test package;
+        else
+          echo "ERROR: no gradlew/gradle/mvnw/mvn found. Add Gradle/Maven wrapper to repo.";
+          exit 3;
+        fi;
 
+        echo "[build] frontend build";
+        cd "${WORKDIR}";
+        FRONTEND_DIR="$(dirname "$(find . -maxdepth 6 -type f -name package.json -not -path '*/node_modules/*' -print -quit)")";
+        echo "FRONTEND_DIR=${FRONTEND_DIR}";
         if [ -z "${FRONTEND_DIR}" ] || [ ! -d "${WORKDIR}/${FRONTEND_DIR}" ]; then
-          echo "ERROR: frontend directory not found (package.json)"
-          exit 4
-        fi
+          echo "ERROR: frontend directory not found";
+          exit 4;
+        fi;
+        cd "${WORKDIR}/${FRONTEND_DIR}";
+        npm ci;
+        npm run build;
 
-        echo "[build] frontend build"
-        cd "${WORKDIR}/${FRONTEND_DIR}"
-        npm ci
-        npm run build
+        echo "[build] collect artifacts";
+        cd "${WORKDIR}";
+        mkdir -p artifact/backend artifact/frontend;
 
-        echo "[build] collect artifacts"
-        cd "${WORKDIR}"
-        mkdir -p artifact/backend artifact/frontend
-
-        JAR_PATH="$(find "${WORKDIR}/${BACKEND_DIR}/build/libs" -maxdepth 1 -type f -name "*.jar" -print -quit)"
-        echo "JAR_PATH=${JAR_PATH}"
+        # jar candidates: Gradle build/libs or Maven target
+        JAR_PATH="$(find "${WORKDIR}/${BACKEND_DIR}" -maxdepth 4 -type f \( -path "*/build/libs/*.jar" -o -path "*/target/*.jar" \) -print -quit)";
+        echo "JAR_PATH=${JAR_PATH}";
         if [ -z "${JAR_PATH}" ]; then
-          echo "ERROR: jar not found under build/libs"
-          ls -la "${WORKDIR}/${BACKEND_DIR}/build/libs" || true
-          exit 5
-        fi
-        cp "${JAR_PATH}" artifact/backend/
+          echo "ERROR: jar not found";
+          exit 5;
+        fi;
+        cp "${JAR_PATH}" artifact/backend/;
 
         if [ -d "${WORKDIR}/${FRONTEND_DIR}/dist" ]; then
-          cp -r "${WORKDIR}/${FRONTEND_DIR}/dist" artifact/frontend/
+          cp -r "${WORKDIR}/${FRONTEND_DIR}/dist" artifact/frontend/;
         else
-          echo "ERROR: dist not found"
-          ls -la "${WORKDIR}/${FRONTEND_DIR}" || true
-          exit 6
-        fi
-
-        echo "COMMIT=${CODEBUILD_RESOLVED_SOURCE_VERSION}" > artifact/BUILD_INFO.txt
+          echo "ERROR: dist not found";
+          exit 6;
+        fi;
 
 artifacts:
   files:
